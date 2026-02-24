@@ -11,6 +11,7 @@
  *   - Random phase initialization on each note-on
  *   - Analog pitch drift (slow random walk per oscillator)
  *   - Stereo panning of detuned pairs (constant-power pan law)
+ *   - Sine sub oscillator with configurable octave offset (-2, -1, 0)
  *   - 1-pole DC-blocking HPF after oscillator mix (stereo)
  *   - TPT/SVF resonant lowpass filter (stereo)
  *   - ADSR amp and filter envelopes

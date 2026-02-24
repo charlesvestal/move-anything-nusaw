@@ -3,8 +3,9 @@
  *
  * Detuned multi-voice sawtooth oscillator (7 voices: 1 center + 3 pairs)
  * with PolyBLEP anti-aliasing, analog pitch drift, stereo panning of
- * detuned pairs, post-mix 1-pole DC-blocking HPF, 2nd-order resonant
- * lowpass filter (TPT/SVF), ADSR amp and filter envelopes.
+ * detuned pairs, sine sub oscillator (configurable octave offset),
+ * post-mix 1-pole DC-blocking HPF, 2nd-order resonant lowpass filter
+ * (TPT/SVF), ADSR amp and filter envelopes.
  *
  * 8-voice polyphony with oldest-note stealing.
  */

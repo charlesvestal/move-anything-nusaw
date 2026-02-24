@@ -483,7 +483,7 @@ static void apply_params_to_engine(nsaw_instance_t *inst) {
     e->vel_sens    = inst->params[P_VEL_SENS];
     e->bend_range  = inst->params[P_BEND_RANGE];
     e->sub_level   = inst->params[P_SUB_LEVEL];
-    e->sub_octave  = (int)inst->params[P_SUB_OCTAVE];
+    e->sub_octave  = (int)roundf(inst->params[P_SUB_OCTAVE]);
 }
 
 static void apply_preset(nsaw_instance_t *inst, int preset_idx) {
