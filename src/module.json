@@ -1,6 +1,6 @@
 {
-  "id": "newpersaw",
-  "name": "NewperSaw",
+  "id": "nusaw",
+  "name": "NuSaw",
   "abbrev": "NS",
   "version": "0.2.0",
   "description": "Polyphonic detuned supersaw synthesizer with Butterworth resonant lowpass filter",
@@ -20,7 +20,7 @@
     "ui_hierarchy": {
       "levels": {
         "root": {
-          "name": "NewperSaw",
+          "name": "NuSaw",
           "params": [
             {
               "key": "preset",

@@ -1,5 +1,5 @@
 /*
- * NewperSaw UI for Move Anything
+ * NuSaw UI for Move Anything
  *
  * Uses shared sound generator UI base for consistent preset browsing.
  * Parameter editing via shadow UI hierarchy when in chain context.
@@ -10,16 +10,16 @@
 /* Shared utilities - absolute path for module location independence */
 import { createSoundGeneratorUI } from '/data/UserData/move-anything/shared/sound_generator_ui.mjs';
 
-/* Create the UI with NewperSaw-specific customizations */
+/* Create the UI with NuSaw-specific customizations */
 const ui = createSoundGeneratorUI({
-    moduleName: 'NewperSaw',
+    moduleName: 'NuSaw',
 
     onInit: (state) => {
-        /* Any NewperSaw specific initialization */
+        /* Any NuSaw specific initialization */
     },
 
     onTick: (state) => {
-        /* Any NewperSaw specific per-tick updates */
+        /* Any NuSaw specific per-tick updates */
     },
 
     onPresetChange: (preset) => {

@@ -1,5 +1,5 @@
 /*
- * newpersaw_engine.cpp - NewperSaw polyphonic synthesizer engine
+ * nusaw_engine.cpp - NuSaw polyphonic synthesizer engine
  *
  * Detuned multi-voice sawtooth (7 voices per note) with:
  *   - PolyBLEP anti-aliased saw generation
@@ -19,7 +19,7 @@
  *   - One-pole parameter smoothing for detune/spread
  */
 
-#include "newpersaw_engine.h"
+#include "nusaw_engine.h"
 #include <math.h>
 #include <string.h>
 

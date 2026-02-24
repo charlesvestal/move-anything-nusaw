@@ -1,5 +1,5 @@
 /*
- * NewperSaw DSP Plugin for Move Anything
+ * NuSaw DSP Plugin for Move Anything
  *
  * Polyphonic detuned supersaw synthesizer with stereo panning,
  * analog drift, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes.
@@ -51,7 +51,7 @@ typedef plugin_api_v2_t* (*move_plugin_init_v2_fn)(const host_api_v1_t *host);
 #define MOVE_PLUGIN_INIT_V2_SYMBOL "move_plugin_init_v2"
 
 /* Engine */
-#include "newpersaw_engine.h"
+#include "nusaw_engine.h"
 }
 
 /* Include param helper */
@@ -63,7 +63,7 @@ static const host_api_v1_t *g_host = NULL;
 static void plugin_log(const char *msg) {
     if (g_host && g_host->log) {
         char buf[256];
-        snprintf(buf, sizeof(buf), "[nsaw] %s", msg);
+        snprintf(buf, sizeof(buf), "[nusaw] %s", msg);
         g_host->log(buf);
     }
 }
@@ -541,7 +541,7 @@ static void* v2_create_instance(const char *module_dir, const char *json_default
     /* Apply first preset */
     apply_preset(inst, 0);
 
-    plugin_log("NewperSaw v2: Instance created (stereo + fx)");
+    plugin_log("NuSaw v2: Instance created (stereo + fx)");
     return inst;
 }
 
@@ -551,7 +551,7 @@ static void v2_destroy_instance(void *instance) {
     free(inst->fx.delay_buf_l);
     free(inst->fx.delay_buf_r);
     free(inst);
-    plugin_log("NewperSaw v2: Instance destroyed");
+    plugin_log("NuSaw v2: Instance destroyed");
 }
 
 static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) {
@@ -665,7 +665,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
         return snprintf(buf, buf_len, "%s", inst->preset_name);
     }
     if (strcmp(key, "name") == 0) {
-        return snprintf(buf, buf_len, "NewperSaw");
+        return snprintf(buf, buf_len, "NuSaw");
     }
     if (strcmp(key, "octave_transpose") == 0) {
         return snprintf(buf, buf_len, "%d", inst->octave_transpose);

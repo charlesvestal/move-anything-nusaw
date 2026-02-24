@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build NewperSaw module for Move Anything (ARM64)
+# Build NuSaw module for Move Anything (ARM64)
 #
 # Automatically uses Docker for cross-compilation if needed.
 # Set CROSS_PREFIX to skip Docker (e.g., for native ARM builds).
@@ -11,7 +11,7 @@ IMAGE_NAME="move-anything-builder"
 
 # Check if we need Docker
 if [ -z "$CROSS_PREFIX" ] && [ ! -f "/.dockerenv" ]; then
-    echo "=== NewperSaw Module Build (via Docker) ==="
+    echo "=== NuSaw Module Build (via Docker) ==="
     echo ""
 
     # Build Docker image if needed
@@ -40,38 +40,38 @@ CROSS_PREFIX="${CROSS_PREFIX:-aarch64-linux-gnu-}"
 
 cd "$REPO_ROOT"
 
-echo "=== Building NewperSaw Module ==="
+echo "=== Building NuSaw Module ==="
 echo "Cross prefix: $CROSS_PREFIX"
 
 # Create build directories
 mkdir -p build
-mkdir -p dist/newpersaw
+mkdir -p dist/nusaw
 
 # Compile DSP plugin
 echo "Compiling DSP plugin..."
 ${CROSS_PREFIX}g++ -g -O3 -shared -fPIC -std=c++14 \
-    src/dsp/newpersaw_plugin.cpp \
-    src/dsp/newpersaw_engine.cpp \
+    src/dsp/nusaw_plugin.cpp \
+    src/dsp/nusaw_engine.cpp \
     -o build/dsp.so \
     -Isrc/dsp \
     -lm
 
 # Copy files to dist (use cat to avoid ExtFS deallocation issues with Docker)
 echo "Packaging..."
-cat src/module.json > dist/newpersaw/module.json
-cat src/ui.js > dist/newpersaw/ui.js
-cat build/dsp.so > dist/newpersaw/dsp.so
-chmod +x dist/newpersaw/dsp.so
+cat src/module.json > dist/nusaw/module.json
+cat src/ui.js > dist/nusaw/ui.js
+cat build/dsp.so > dist/nusaw/dsp.so
+chmod +x dist/nusaw/dsp.so
 
 # Create tarball for release
 cd dist
-tar -czvf newpersaw-module.tar.gz newpersaw/
+tar -czvf nusaw-module.tar.gz nusaw/
 cd ..
 
 echo ""
 echo "=== Build Complete ==="
-echo "Output: dist/newpersaw/"
-echo "Tarball: dist/newpersaw-module.tar.gz"
+echo "Output: dist/nusaw/"
+echo "Tarball: dist/nusaw-module.tar.gz"
 echo ""
 echo "To install on Move:"
 echo "  ./scripts/install.sh"

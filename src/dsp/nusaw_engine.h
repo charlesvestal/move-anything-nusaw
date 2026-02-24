@@ -1,5 +1,5 @@
 /*
- * newpersaw_engine.h - NewperSaw polyphonic synthesizer engine
+ * nusaw_engine.h - NuSaw polyphonic synthesizer engine
  *
  * Detuned multi-voice sawtooth oscillator (7 voices: 1 center + 3 pairs)
  * with PolyBLEP anti-aliasing, analog pitch drift, stereo panning of
@@ -10,8 +10,8 @@
  * 8-voice polyphony with oldest-note stealing.
  */
 
-#ifndef NEWPERSAW_ENGINE_H
-#define NEWPERSAW_ENGINE_H
+#ifndef NUSAW_ENGINE_H
+#define NUSAW_ENGINE_H
 
 #include <stdint.h>
 
@@ -135,4 +135,4 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
 }
 #endif
 
-#endif /* NEWPERSAW_ENGINE_H */
+#endif /* NUSAW_ENGINE_H */

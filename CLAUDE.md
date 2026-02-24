@@ -4,16 +4,16 @@ Instructions for Claude Code when working with this repository.
 
 ## Project Overview
 
-NewperSaw module for Move Anything - a polyphonic detuned supersaw synthesizer with sine sub oscillator, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes, Juno-style chorus, and stereo ping-pong delay.
+NuSaw module for Move Anything - a polyphonic detuned supersaw synthesizer with sine sub oscillator, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes, Juno-style chorus, and stereo ping-pong delay.
 
 ## Architecture
 
 ```
 src/
   dsp/
-    newpersaw_plugin.cpp  # Main plugin wrapper (V2 API)
-    newpersaw_engine.h    # Synth engine header
-    newpersaw_engine.cpp  # Synth engine implementation
+    nusaw_plugin.cpp  # Main plugin wrapper (V2 API)
+    nusaw_engine.h    # Synth engine header
+    nusaw_engine.cpp  # Synth engine implementation
     param_helper.h        # Shared parameter helper
   ui.js                   # JavaScript UI (uses shared sound_generator_ui)
   module.json             # Module metadata
