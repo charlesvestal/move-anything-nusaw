@@ -1,8 +1,21 @@
 /*
  * newpersaw_engine.cpp - NewperSaw polyphonic synthesizer engine
  *
- * Sawtooth oscillator with PolyBLEP, TPT/SVF resonant lowpass filter,
- * ADSR amp and filter envelopes, 8-voice polyphony.
+ * Detuned multi-voice sawtooth (7 voices per note) with:
+ *   - PolyBLEP anti-aliased saw generation
+ *   - Exponential detune spacing (1:3:6 ratio) for dense chorused core
+ *   - Piecewise-linear detune curve for fine resolution at low values
+ *   - Center-anchored mix law (center ~1.5x sides at full spread)
+ *   - Non-linear spread curve (spread^1.5) with minimum floor
+ *   - RMS-based gain normalization for consistent loudness
+ *   - Random phase initialization on each note-on
+ *   - Analog pitch drift (slow random walk per oscillator)
+ *   - Stereo panning of detuned pairs (constant-power pan law)
+ *   - 1-pole DC-blocking HPF after oscillator mix (stereo)
+ *   - TPT/SVF resonant lowpass filter (stereo)
+ *   - ADSR amp and filter envelopes
+ *   - 8-voice polyphony with oldest-note stealing
+ *   - One-pole parameter smoothing for detune/spread
  */
 
 #include "newpersaw_engine.h"
@@ -14,8 +27,97 @@
 #endif
 
 /* =====================================================================
+ * Constants
+ * ===================================================================== */
+
+/* Maximum fractional detune (10% of base frequency at detune=1.0)
+ * This is applied to the outermost pair; inner pairs are closer per spacing law */
+#define DETUNE_K_MAX 0.10f
+
+/* DC-blocking HPF cutoff ~20Hz: R = 1 - 2*pi*fc/fs */
+#define HPF_R 0.99715f  /* 1 - 2*pi*20/44100 */
+
+/* Parameter smoothing coefficient (~5ms at 44100Hz)
+ * coeff = 1 - exp(-1/(0.005 * 44100)) ~ 0.00452 */
+#define SMOOTH_COEFF 0.00452f
+
+/* Side voice gain scaling: at spread=1.0, each side voice is at 0.667
+ * so the center (1.0) is ~1.5x any individual side voice */
+#define SIDE_GAIN_SCALE 0.667f
+
+/* Minimum side voice presence (~1.5% floor at spread=0)
+ * Ensures detuned voices never completely vanish */
+#define SIDE_GAIN_FLOOR 0.015f
+
+/* Analog pitch drift: slow random walk per oscillator
+ * DRIFT_AMOUNT ~0.35 cents (0.02% of frequency)
+ * DRIFT_COEFF for ~8Hz lowpass: 2*pi*8/44100 ~ 0.00114 */
+#define DRIFT_AMOUNT 0.0002f
+#define DRIFT_COEFF  0.00114f
+
+/* Detune voice spacing coefficients (exponential, ratio ~1:3:6)
+ * Normalized so outermost = 1.0:
+ *   pair 1 (inner):  1/6 = 0.1667  -- very close, subtle beating
+ *   pair 2 (middle): 3/6 = 0.5     -- moderate spread
+ *   pair 3 (outer):  6/6 = 1.0     -- widest, adds size
+ * Voice layout: [center, +c1, -c1, +c2, -c2, +c3, -c3] */
+static const float g_detune_coeff[NSAW_OSC_VOICES] = {
+     0.0f,          /* voice 0: center */
+     1.0f / 6.0f,   /* voice 1: +inner */
+    -1.0f / 6.0f,   /* voice 2: -inner */
+     3.0f / 6.0f,   /* voice 3: +middle */
+    -3.0f / 6.0f,   /* voice 4: -middle */
+     1.0f,          /* voice 5: +outer */
+    -1.0f,          /* voice 6: -outer */
+};
+
+/* Stereo panning gains (constant-power pan law)
+ * Pan positions: center=0, inner=+/-0.18, middle=+/-0.35, outer=+/-0.55
+ * Formula: theta = (1 + pan) / 2 * pi/2, L = cos(theta), R = sin(theta)
+ *
+ * center (0.00): L=0.7071 R=0.7071
+ * +inner (0.18): L=0.6004 R=0.7998   -inner (-0.18): L=0.7998 R=0.6004
+ * +mid   (0.35): L=0.4952 R=0.8688   -mid   (-0.35): L=0.8688 R=0.4952
+ * +outer (0.55): L=0.3473 R=0.9378   -outer (-0.55): L=0.9378 R=0.3473
+ */
+static const float g_pan_l[NSAW_OSC_VOICES] = {
+    0.7071f,  /* center */
+    0.6004f,  /* +inner */
+    0.7998f,  /* -inner */
+    0.4952f,  /* +middle */
+    0.8688f,  /* -middle */
+    0.3473f,  /* +outer */
+    0.9378f,  /* -outer */
+};
+
+static const float g_pan_r[NSAW_OSC_VOICES] = {
+    0.7071f,  /* center */
+    0.7998f,  /* +inner */
+    0.6004f,  /* -inner */
+    0.8688f,  /* +middle */
+    0.4952f,  /* -middle */
+    0.9378f,  /* +outer */
+    0.3473f,  /* -outer */
+};
+
+/* =====================================================================
  * Helpers
  * ===================================================================== */
+
+/* xorshift32 PRNG -- fast, good enough for phase randomization and drift */
+static inline uint32_t xorshift32(uint32_t *state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+/* Random float in [0, 1) from PRNG */
+static inline float rand_float(uint32_t *state) {
+    return (float)(xorshift32(state) & 0x7FFFFF) / (float)0x800000;
+}
 
 /* Convert 0.0-1.0 parameter to time in seconds (1ms to 10s, exponential) */
 static inline float param_to_seconds(float p) {
@@ -40,6 +142,24 @@ static inline float polyblep(float t, float dt) {
     return 0.0f;
 }
 
+/* Piecewise-linear detune curve: maps [0,1] -> [0,1]
+ * Three segments for musical response:
+ *   [0.0, 0.1] -> [0.0, 0.02]   gentle -- subtle thickening
+ *   [0.1, 0.5] -> [0.02, 0.25]  moderate -- pads, leads, stabs
+ *   [0.5, 1.0] -> [0.25, 1.0]   steep -- dramatic wide detuning */
+static inline float detune_curve(float x) {
+    if (x < 0.1f) {
+        /* Segment 1: slope = 0.02 / 0.1 = 0.2 */
+        return x * 0.2f;
+    } else if (x < 0.5f) {
+        /* Segment 2: slope = (0.25 - 0.02) / (0.5 - 0.1) = 0.575 */
+        return 0.02f + (x - 0.1f) * 0.575f;
+    } else {
+        /* Segment 3: slope = (1.0 - 0.25) / (0.5) = 1.5 */
+        return 0.25f + (x - 0.5f) * 1.5f;
+    }
+}
+
 /* =====================================================================
  * Engine init
  * ===================================================================== */
@@ -49,9 +169,14 @@ void nsaw_engine_init(nsaw_engine_t *engine) {
     engine->sample_rate = NSAW_SAMPLE_RATE;
     engine->voice_counter = 0;
 
+    /* Seed PRNG (non-zero) */
+    engine->rng_state = 0xDEADBEEF;
+
     /* Default parameter values */
     engine->cutoff = 0.7f;
     engine->resonance = 0.0f;
+    engine->detune = 0.3f;
+    engine->spread = 0.7f;
     engine->f_amount = 0.5f;
     engine->attack = 0.01f;
     engine->decay = 0.3f;
@@ -64,8 +189,14 @@ void nsaw_engine_init(nsaw_engine_t *engine) {
     engine->volume = 0.7f;
     engine->vel_sens = 0.5f;
     engine->bend_range = 0.167f;  /* ~2 semitones */
+    engine->sub_level = 0.0f;
+    engine->sub_octave = -1;
     engine->octave_transpose = 0;
     engine->current_bend = 0.0f;
+
+    /* Initialize smoothed params to match targets */
+    engine->smooth_detune = engine->detune;
+    engine->smooth_spread = engine->spread;
 
     for (int i = 0; i < NSAW_MAX_VOICES; i++) {
         engine->voices[i].active = 0;
@@ -119,18 +250,31 @@ void nsaw_engine_note_on(nsaw_engine_t *engine, int note, float velocity) {
     v->note = note;
     v->velocity = velocity;
     v->freq = note_to_freq(note + engine->octave_transpose * 12);
-    v->phase = 0.0f;
     v->age = engine->voice_counter++;
 
-    /* Reset filter state for new voice */
-    v->ic1eq = 0.0f;
-    v->ic2eq = 0.0f;
+    /* Random phase initialization and zero drift state */
+    for (int j = 0; j < NSAW_OSC_VOICES; j++) {
+        v->phase[j] = rand_float(&engine->rng_state);
+        v->drift[j] = 0.0f;
+    }
 
-    /* Trigger amp envelope */
+    /* Sub oscillator starts at zero for clean attack */
+    v->sub_phase = 0.0f;
+
+    /* Reset DC-blocking HPF state (stereo) */
+    v->hpf_x_prev_l = 0.0f;
+    v->hpf_y_prev_l = 0.0f;
+    v->hpf_x_prev_r = 0.0f;
+    v->hpf_y_prev_r = 0.0f;
+
+    /* Reset lowpass filter state (stereo) */
+    v->ic1eq_l = 0.0f;
+    v->ic2eq_l = 0.0f;
+    v->ic1eq_r = 0.0f;
+    v->ic2eq_r = 0.0f;
+
+    /* Trigger envelopes (smooth retrigger: start from current level) */
     v->amp_env.stage = NSAW_ENV_ATTACK;
-    /* Smooth retrigger: start from current level */
-
-    /* Trigger filter envelope */
     v->filt_env.stage = NSAW_ENV_ATTACK;
 }
 
@@ -151,13 +295,20 @@ void nsaw_engine_pitch_bend(nsaw_engine_t *engine, float bend) {
 
 void nsaw_engine_all_notes_off(nsaw_engine_t *engine) {
     for (int i = 0; i < NSAW_MAX_VOICES; i++) {
-        engine->voices[i].active = 0;
-        engine->voices[i].amp_env.stage = NSAW_ENV_OFF;
-        engine->voices[i].amp_env.level = 0.0f;
-        engine->voices[i].filt_env.stage = NSAW_ENV_OFF;
-        engine->voices[i].filt_env.level = 0.0f;
-        engine->voices[i].ic1eq = 0.0f;
-        engine->voices[i].ic2eq = 0.0f;
+        nsaw_voice_t *v = &engine->voices[i];
+        v->active = 0;
+        v->amp_env.stage = NSAW_ENV_OFF;
+        v->amp_env.level = 0.0f;
+        v->filt_env.stage = NSAW_ENV_OFF;
+        v->filt_env.level = 0.0f;
+        v->ic1eq_l = 0.0f;
+        v->ic2eq_l = 0.0f;
+        v->ic1eq_r = 0.0f;
+        v->ic2eq_r = 0.0f;
+        v->hpf_x_prev_l = 0.0f;
+        v->hpf_y_prev_l = 0.0f;
+        v->hpf_x_prev_r = 0.0f;
+        v->hpf_y_prev_r = 0.0f;
     }
 }
 
@@ -201,107 +352,190 @@ static inline void process_envelope(nsaw_envelope_t *env,
 }
 
 /* =====================================================================
- * Render block
+ * Render block (stereo)
  * ===================================================================== */
 
-void nsaw_engine_render(nsaw_engine_t *engine, float *output, int frames) {
+void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right, int frames) {
     if (frames > NSAW_MAX_RENDER) frames = NSAW_MAX_RENDER;
 
-    /* Precompute envelope coefficients from parameters */
     float sr = engine->sample_rate;
 
-    /* Amp envelope coefficients */
-    float amp_attack_time = param_to_seconds(engine->attack);
-    float amp_decay_time = param_to_seconds(engine->decay);
+    /* --- Precompute envelope coefficients --- */
+
+    float amp_attack_rate = 1.0f / (param_to_seconds(engine->attack) * sr);
+    float amp_decay_coeff = expf(-4.0f / (param_to_seconds(engine->decay) * sr));
     float amp_sustain = engine->sustain;
-    float amp_release_time = param_to_seconds(engine->release);
+    float amp_release_coeff = expf(-4.0f / (param_to_seconds(engine->release) * sr));
 
-    float amp_attack_rate = 1.0f / (amp_attack_time * sr);
-    float amp_decay_coeff = expf(-4.0f / (amp_decay_time * sr));
-    float amp_release_coeff = expf(-4.0f / (amp_release_time * sr));
-
-    /* Filter envelope coefficients */
-    float filt_attack_time = param_to_seconds(engine->f_attack);
-    float filt_decay_time = param_to_seconds(engine->f_decay);
+    float filt_attack_rate = 1.0f / (param_to_seconds(engine->f_attack) * sr);
+    float filt_decay_coeff = expf(-4.0f / (param_to_seconds(engine->f_decay) * sr));
     float filt_sustain = engine->f_sustain;
-    float filt_release_time = param_to_seconds(engine->f_release);
+    float filt_release_coeff = expf(-4.0f / (param_to_seconds(engine->f_release) * sr));
 
-    float filt_attack_rate = 1.0f / (filt_attack_time * sr);
-    float filt_decay_coeff = expf(-4.0f / (filt_decay_time * sr));
-    float filt_release_coeff = expf(-4.0f / (filt_release_time * sr));
+    /* --- Filter parameters --- */
 
-    /* Filter base cutoff: exponential mapping 20Hz to 20kHz */
+    /* Cutoff: exponential mapping 20Hz to 20kHz */
     float base_cutoff_hz = 20.0f * powf(1000.0f, engine->cutoff);
     if (base_cutoff_hz > 20000.0f) base_cutoff_hz = 20000.0f;
 
-    /* Resonance: map 0-1 to Q 0.5 to 20 (0.5 = Butterworth at ~0.707 with mild undershoot) */
-    /* Q = 0.707 is true Butterworth; above that we get resonance peak */
+    /* Resonance: Q from 0.5 to 20 */
     float q = 0.5f + engine->resonance * 19.5f;
 
-    /* Filter envelope amount in octaves (0 = none, 1.0 = 8 octaves) */
+    /* Filter envelope amount in octaves (0 to 8) */
     float f_env_octaves = engine->f_amount * 8.0f;
 
-    /* Pitch bend ratio */
+    /* --- Pitch bend --- */
+
     float bend_semitones = engine->current_bend * engine->bend_range * 12.0f;
     float bend_ratio = powf(2.0f, bend_semitones / 12.0f);
 
-    /* Master volume with headroom for polyphony */
+    /* --- Master volume with polyphony headroom --- */
+
     float master_vol = engine->volume * 0.3f;
 
-    /* Clear output */
-    memset(output, 0, frames * sizeof(float));
+    /* --- Clear output --- */
 
-    /* Process each voice */
+    memset(out_left, 0, frames * sizeof(float));
+    memset(out_right, 0, frames * sizeof(float));
+
+    /* --- Process each polyphonic voice --- */
+
     for (int vi = 0; vi < NSAW_MAX_VOICES; vi++) {
         nsaw_voice_t *v = &engine->voices[vi];
         if (v->amp_env.stage == NSAW_ENV_OFF) continue;
 
-        float freq = v->freq * bend_ratio;
-        float dt = freq / sr;  /* Phase increment per sample */
-
-        /* Velocity scaling */
+        float f0 = v->freq * bend_ratio;
         float vel_gain = 1.0f - engine->vel_sens + engine->vel_sens * v->velocity;
 
-        for (int i = 0; i < frames; i++) {
-            /* --- Sawtooth oscillator with PolyBLEP --- */
-            float saw = 2.0f * v->phase - 1.0f;  /* Naive saw: -1 to +1 */
-            saw -= polyblep(v->phase, dt);         /* Anti-aliasing */
+        for (int n = 0; n < frames; n++) {
 
-            /* Advance phase */
-            v->phase += dt;
-            if (v->phase >= 1.0f) v->phase -= 1.0f;
+            /* --- Parameter smoothing (per-sample one-pole) --- */
+            engine->smooth_detune += (engine->detune - engine->smooth_detune) * SMOOTH_COEFF;
+            engine->smooth_spread += (engine->spread - engine->smooth_spread) * SMOOTH_COEFF;
+
+            float cur_detune = engine->smooth_detune;
+            float cur_spread = engine->smooth_spread;
+
+            /* --- Detune scaling ---
+             * Piecewise-linear curve maps detune param to [0,1],
+             * then D = f0 * k_max * curve(detune).
+             * k_max = 0.10 (10% max detune for outermost pair) */
+            float D = f0 * DETUNE_K_MAX * detune_curve(cur_detune);
+            float dInc = D / sr;
+
+            /* Base phase increment */
+            float inc0 = f0 / sr;
+
+            /* --- Non-linear spread curve ---
+             * spread^1.5 gives gentler onset (subtle at low, dramatic at high)
+             * Computed as spread * sqrt(spread) to avoid powf
+             * Floor ensures detuned voices never completely vanish */
+            float gs = cur_spread * sqrtf(cur_spread) * SIDE_GAIN_SCALE;
+            if (gs < SIDE_GAIN_FLOOR) gs = SIDE_GAIN_FLOOR;
+
+            /* RMS normalization: consistent loudness regardless of spread
+             * Total energy = 1^2 + N_sides * gs^2; norm = 1/sqrt(total)
+             * Works correctly with stereo panning (constant-power preserves total energy) */
+            float norm = 1.0f / sqrtf(1.0f + (float)(NSAW_OSC_VOICES - 1) * gs * gs);
+
+            /* --- Generate and mix all oscillator voices (stereo) --- */
+
+            float osc_mix_l = 0.0f;
+            float osc_mix_r = 0.0f;
+
+            for (int j = 0; j < NSAW_OSC_VOICES; j++) {
+                /* Analog pitch drift: one-pole lowpass filtered white noise
+                 * Creates slow, independent pitch wander per oscillator (~0.35 cents) */
+                float noise = rand_float(&engine->rng_state) * 2.0f - 1.0f;
+                v->drift[j] += (noise - v->drift[j]) * DRIFT_COEFF;
+                float drift_mult = 1.0f + v->drift[j] * DRIFT_AMOUNT;
+
+                /* Per-voice increment: inc[j] = (inc0 + coeff[j] * dInc) * drift */
+                float inc_j = (inc0 + g_detune_coeff[j] * dInc) * drift_mult;
+                if (inc_j < 0.0f) inc_j = 0.0f;  /* Safety clamp */
+
+                /* Advance and wrap phase */
+                v->phase[j] += inc_j;
+                if (v->phase[j] >= 1.0f) v->phase[j] -= 1.0f;
+
+                /* Naive sawtooth: map phase [0,1) to [-1,+1) */
+                float saw = 2.0f * v->phase[j] - 1.0f;
+
+                /* PolyBLEP anti-aliasing */
+                saw -= polyblep(v->phase[j], inc_j);
+
+                /* Apply gain (center=1.0, sides=gs) and stereo pan */
+                float gain = (j == 0) ? 1.0f : gs;
+                osc_mix_l += saw * gain * g_pan_l[j];
+                osc_mix_r += saw * gain * g_pan_r[j];
+            }
+
+            /* RMS-based normalization for consistent loudness */
+            osc_mix_l *= norm;
+            osc_mix_r *= norm;
+
+            /* --- Sub oscillator (sine, center-panned) --- */
+            if (engine->sub_level > 0.001f) {
+                float sub_mult = (engine->sub_octave == -2) ? 0.25f :
+                                 (engine->sub_octave == -1) ? 0.5f : 1.0f;
+                float sub_inc = inc0 * sub_mult;
+                v->sub_phase += sub_inc;
+                if (v->sub_phase >= 1.0f) v->sub_phase -= 1.0f;
+                float sub = sinf(v->sub_phase * 2.0f * (float)M_PI) * engine->sub_level;
+                osc_mix_l += sub * 0.7071f;  /* center pan */
+                osc_mix_r += sub * 0.7071f;
+            }
+
+            /* --- Post-mix DC-blocking HPF (stereo) ---
+             * y[n] = x[n] - x[n-1] + R * y[n-1]
+             * 1-pole highpass, cutoff ~20Hz */
+            float hpf_l = osc_mix_l - v->hpf_x_prev_l + HPF_R * v->hpf_y_prev_l;
+            v->hpf_x_prev_l = osc_mix_l;
+            v->hpf_y_prev_l = hpf_l;
+
+            float hpf_r = osc_mix_r - v->hpf_x_prev_r + HPF_R * v->hpf_y_prev_r;
+            v->hpf_x_prev_r = osc_mix_r;
+            v->hpf_y_prev_r = hpf_r;
 
             /* --- Process envelopes --- */
+
             process_envelope(&v->amp_env, amp_attack_rate, amp_decay_coeff,
                            amp_sustain, amp_release_coeff);
             process_envelope(&v->filt_env, filt_attack_rate, filt_decay_coeff,
                            filt_sustain, filt_release_coeff);
 
-            /* --- Filter with envelope modulation --- */
-            /* Modulated cutoff frequency */
+            /* --- Resonant lowpass filter with envelope modulation (stereo) --- */
+
             float mod_cutoff_hz = base_cutoff_hz * powf(2.0f, v->filt_env.level * f_env_octaves);
             if (mod_cutoff_hz > 20000.0f) mod_cutoff_hz = 20000.0f;
             if (mod_cutoff_hz < 20.0f) mod_cutoff_hz = 20.0f;
 
-            /* TPT/SVF 2nd-order lowpass filter */
+            /* TPT/SVF coefficients (shared between L and R) */
             float g = tanf((float)M_PI * mod_cutoff_hz / sr);
-            float k = 1.0f / q;  /* Damping: k = 1/Q; Butterworth = sqrt(2) */
+            float k = 1.0f / q;
             float a1 = 1.0f / (1.0f + g * (g + k));
             float a2 = g * a1;
             float a3 = g * a2;
 
-            float v3 = saw - v->ic2eq;
-            float v1 = a1 * v->ic1eq + a2 * v3;
-            float v2 = v->ic2eq + a2 * v->ic1eq + a3 * v3;
-            v->ic1eq = 2.0f * v1 - v->ic1eq;
-            v->ic2eq = 2.0f * v2 - v->ic2eq;
+            /* L channel SVF */
+            float t3_l = hpf_l - v->ic2eq_l;
+            float t1_l = a1 * v->ic1eq_l + a2 * t3_l;
+            float t2_l = v->ic2eq_l + a2 * v->ic1eq_l + a3 * t3_l;
+            v->ic1eq_l = 2.0f * t1_l - v->ic1eq_l;
+            v->ic2eq_l = 2.0f * t2_l - v->ic2eq_l;
 
-            float filtered = v2;  /* Lowpass output */
+            /* R channel SVF */
+            float t3_r = hpf_r - v->ic2eq_r;
+            float t1_r = a1 * v->ic1eq_r + a2 * t3_r;
+            float t2_r = v->ic2eq_r + a2 * v->ic1eq_r + a3 * t3_r;
+            v->ic1eq_r = 2.0f * t1_r - v->ic1eq_r;
+            v->ic2eq_r = 2.0f * t2_r - v->ic2eq_r;
 
             /* --- Apply amp envelope and velocity --- */
-            float sample = filtered * v->amp_env.level * vel_gain;
 
-            output[i] += sample * master_vol;
+            float amp = v->amp_env.level * vel_gain * master_vol;
+            out_left[n]  += t2_l * amp;
+            out_right[n] += t2_r * amp;
         }
     }
 }
