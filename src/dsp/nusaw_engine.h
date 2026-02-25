@@ -23,10 +23,12 @@ extern "C" {
 #define NSAW_SAMPLE_RATE 44100
 #define NSAW_MAX_RENDER 256
 
-/* Detuned oscillator configuration (compile-time)
- * M detuned pairs + 1 center = 2*M+1 total oscillator voices per poly voice */
-#define NSAW_DETUNE_PAIRS 3
-#define NSAW_OSC_VOICES (2 * NSAW_DETUNE_PAIRS + 1)  /* 7 */
+/* Detuned oscillator configuration (runtime-configurable)
+ * M detuned pairs + 1 center = 2*M+1 total oscillator voices per poly voice
+ * Max: 12 pairs + 1 center = 25 oscillators */
+#define NSAW_MAX_DETUNE_PAIRS 12
+#define NSAW_MAX_OSC_VOICES (2 * NSAW_MAX_DETUNE_PAIRS + 1)  /* 25 */
+#define NSAW_DEFAULT_OSC_VOICES 7
 
 /* Envelope stages */
 typedef enum {
@@ -50,11 +52,11 @@ typedef struct {
     float velocity;
     float freq;                         /* Base frequency in Hz */
 
-    /* Multi-voice sawtooth phases (7 oscillators) */
-    float phase[NSAW_OSC_VOICES];
+    /* Multi-voice sawtooth phases (up to 25 oscillators) */
+    float phase[NSAW_MAX_OSC_VOICES];
 
     /* Analog pitch drift state per oscillator (lowpass-filtered noise) */
-    float drift[NSAW_OSC_VOICES];
+    float drift[NSAW_MAX_OSC_VOICES];
 
     /* Sub oscillator phase (sine, -1 octave) */
     float sub_phase;
@@ -108,6 +110,13 @@ typedef struct {
     float sub_level;        /* Sub oscillator level (sine) */
     int sub_octave;         /* Sub oscillator octave offset (-2, -1, 0) */
 
+    /* Configurable oscillator count (odd, 3-25) */
+    int num_oscs;           /* Current oscillator count */
+    int num_pairs;          /* (num_oscs - 1) / 2 */
+    float detune_coeff[NSAW_MAX_OSC_VOICES];  /* Runtime detune coefficients */
+    float pan_l[NSAW_MAX_OSC_VOICES];         /* Runtime pan gains L */
+    float pan_r[NSAW_MAX_OSC_VOICES];         /* Runtime pan gains R */
+
     int octave_transpose;   /* -3 to +3 octaves */
 
     /* Pitch bend state */
@@ -116,11 +125,15 @@ typedef struct {
     /* Smoothed parameter state (for zipper-free modulation) */
     float smooth_detune;
     float smooth_spread;
+    float smooth_cutoff;
 
 } nsaw_engine_t;
 
 /* Initialize engine */
 void nsaw_engine_init(nsaw_engine_t *engine);
+
+/* Update oscillator configuration (call when saw count changes) */
+void nsaw_engine_update_osc_config(nsaw_engine_t *engine, int num_oscs);
 
 /* MIDI handlers */
 void nsaw_engine_note_on(nsaw_engine_t *engine, int note, float velocity);

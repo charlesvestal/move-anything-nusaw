@@ -1,7 +1,7 @@
 /*
  * NuSaw DSP Plugin for Move Anything
  *
- * Polyphonic detuned supersaw synthesizer with stereo panning,
+ * Polyphonic detuned multi-saw synthesizer with stereo panning,
  * analog drift, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes.
  *
  * V2 API - instance-based for multi-instance support
@@ -91,6 +91,7 @@ enum {
     P_BEND_RANGE,
     P_SUB_LEVEL,
     P_SUB_OCTAVE,
+    P_SAW_COUNT,
     P_CHORUS_MIX,
     P_CHORUS_DEPTH,
     P_DELAY_TIME,
@@ -119,6 +120,7 @@ static const param_def_t g_shadow_params[] = {
     {"bend_range",  "Bend Range",   PARAM_TYPE_FLOAT, P_BEND_RANGE, 0.0f, 1.0f},
     {"sub_level",   "Sub",          PARAM_TYPE_FLOAT, P_SUB_LEVEL,  0.0f, 1.0f},
     {"sub_octave",  "Sub Oct",      PARAM_TYPE_INT,   P_SUB_OCTAVE, -2.0f, 0.0f},
+    {"saw_count",   "Saws",         PARAM_TYPE_INT,   P_SAW_COUNT,   3.0f, 25.0f},
     {"chorus_mix",  "Chorus",       PARAM_TYPE_FLOAT, P_CHORUS_MIX,  0.0f, 1.0f},
     {"chorus_depth","Chr Depth",    PARAM_TYPE_FLOAT, P_CHORUS_DEPTH,0.0f, 1.0f},
     {"delay_time",  "Dly Time",     PARAM_TYPE_FLOAT, P_DELAY_TIME,  0.0f, 1.0f},
@@ -143,7 +145,7 @@ struct NsawPreset {
  * Parameter order: cutoff, resonance, detune, spread, f_amount,
  *                  attack, decay, sustain, release,
  *                  f_attack, f_decay, f_sustain, f_release,
- *                  volume, vel_sens, bend_range, sub_level, sub_octave,
+ *                  volume, vel_sens, bend_range, sub_level, sub_octave, saw_count,
  *                  chorus_mix, chorus_depth, delay_time, delay_fback, delay_mix, delay_tone
  *
  * Envelope time reference (param_to_seconds = 0.001 * 10000^p):
@@ -165,7 +167,7 @@ static const NsawPreset g_factory_presets[] = {
         0.75f, 0.00f, 0.25f, 0.60f, 0.40f,
         0.00f, 0.55f, 0.70f, 0.55f,
         0.00f, 0.50f, 0.30f, 0.50f,
-        0.70f, 0.50f, 0.167f, 0.00f, -1.0f,
+        0.70f, 0.50f, 0.167f, 0.00f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.00f, 0.55f
     }},
 
@@ -176,7 +178,7 @@ static const NsawPreset g_factory_presets[] = {
         0.80f, 0.15f, 0.60f, 0.90f, 0.55f,
         0.00f, 0.55f, 0.70f, 0.55f,
         0.00f, 0.50f, 0.20f, 0.50f,
-        0.75f, 0.40f, 0.167f, 0.25f, -1.0f,
+        0.75f, 0.40f, 0.167f, 0.25f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.70f, 0.35f, 0.18f, 0.50f
     }},
 
@@ -185,7 +187,7 @@ static const NsawPreset g_factory_presets[] = {
         0.72f, 0.10f, 0.45f, 0.85f, 0.45f,
         0.00f, 0.55f, 0.72f, 0.55f,
         0.00f, 0.55f, 0.30f, 0.55f,
-        0.72f, 0.35f, 0.167f, 0.30f, -1.0f,
+        0.72f, 0.35f, 0.167f, 0.30f, -1.0f, 7.0f,
         0.10f, 0.40f, 0.72f, 0.40f, 0.15f, 0.45f
     }},
 
@@ -194,7 +196,7 @@ static const NsawPreset g_factory_presets[] = {
         0.85f, 0.28f, 0.65f, 0.85f, 0.40f,
         0.00f, 0.50f, 0.65f, 0.50f,
         0.00f, 0.45f, 0.30f, 0.45f,
-        0.78f, 0.50f, 0.167f, 0.20f, -1.0f,
+        0.78f, 0.50f, 0.167f, 0.20f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.60f, 0.30f, 0.12f, 0.60f
     }},
 
@@ -203,7 +205,7 @@ static const NsawPreset g_factory_presets[] = {
         0.75f, 0.05f, 0.50f, 0.92f, 0.50f,
         0.15f, 0.60f, 0.68f, 0.60f,
         0.10f, 0.55f, 0.35f, 0.55f,
-        0.68f, 0.30f, 0.167f, 0.20f, -1.0f,
+        0.68f, 0.30f, 0.167f, 0.20f, -1.0f, 7.0f,
         0.18f, 0.45f, 0.72f, 0.42f, 0.22f, 0.40f
     }},
 
@@ -214,7 +216,7 @@ static const NsawPreset g_factory_presets[] = {
         0.82f, 0.18f, 0.55f, 0.92f, 0.75f,
         0.00f, 0.50f, 0.00f, 0.45f,
         0.00f, 0.45f, 0.00f, 0.40f,
-        0.82f, 0.55f, 0.167f, 0.20f, -1.0f,
+        0.82f, 0.55f, 0.167f, 0.20f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.60f, 0.42f, 0.20f, 0.50f
     }},
 
@@ -223,7 +225,7 @@ static const NsawPreset g_factory_presets[] = {
         0.40f, 0.20f, 0.45f, 0.85f, 0.85f,
         0.00f, 0.55f, 0.05f, 0.50f,
         0.00f, 0.50f, 0.00f, 0.45f,
-        0.78f, 0.50f, 0.167f, 0.25f, -1.0f,
+        0.78f, 0.50f, 0.167f, 0.25f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.66f, 0.45f, 0.18f, 0.45f
     }},
 
@@ -234,7 +236,7 @@ static const NsawPreset g_factory_presets[] = {
         0.78f, 0.15f, 0.30f, 0.75f, 0.55f,
         0.00f, 0.55f, 0.65f, 0.55f,
         0.00f, 0.50f, 0.25f, 0.50f,
-        0.75f, 0.40f, 0.167f, 0.25f, -1.0f,
+        0.75f, 0.40f, 0.167f, 0.25f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.18f, 0.50f
     }},
 
@@ -243,7 +245,7 @@ static const NsawPreset g_factory_presets[] = {
         0.72f, 0.10f, 0.40f, 0.90f, 0.50f,
         0.25f, 0.60f, 0.75f, 0.60f,
         0.20f, 0.55f, 0.35f, 0.55f,
-        0.70f, 0.30f, 0.167f, 0.35f, -1.0f,
+        0.70f, 0.30f, 0.167f, 0.35f, -1.0f, 7.0f,
         0.22f, 0.50f, 0.70f, 0.30f, 0.12f, 0.45f
     }},
 
@@ -254,7 +256,7 @@ static const NsawPreset g_factory_presets[] = {
         0.62f, 0.08f, 0.42f, 0.95f, 0.40f,
         0.65f, 0.60f, 0.85f, 0.70f,
         0.60f, 0.55f, 0.50f, 0.65f,
-        0.65f, 0.20f, 0.167f, 0.30f, -1.0f,
+        0.65f, 0.20f, 0.167f, 0.30f, -1.0f, 9.0f,
         0.35f, 0.55f, 0.72f, 0.35f, 0.15f, 0.40f
     }},
 
@@ -263,7 +265,7 @@ static const NsawPreset g_factory_presets[] = {
         0.48f, 0.12f, 0.50f, 0.90f, 0.30f,
         0.75f, 0.65f, 0.88f, 0.80f,
         0.70f, 0.60f, 0.55f, 0.75f,
-        0.60f, 0.15f, 0.167f, 0.35f, -1.0f,
+        0.60f, 0.15f, 0.167f, 0.35f, -1.0f, 9.0f,
         0.30f, 0.60f, 0.75f, 0.45f, 0.20f, 0.30f
     }},
 
@@ -272,7 +274,7 @@ static const NsawPreset g_factory_presets[] = {
         0.78f, 0.05f, 0.35f, 0.88f, 0.35f,
         0.70f, 0.55f, 0.82f, 0.75f,
         0.65f, 0.50f, 0.55f, 0.70f,
-        0.62f, 0.20f, 0.167f, 0.10f, 0.0f,
+        0.62f, 0.20f, 0.167f, 0.10f, 0.0f, 9.0f,
         0.40f, 0.65f, 0.73f, 0.40f, 0.18f, 0.55f
     }},
 
@@ -281,7 +283,7 @@ static const NsawPreset g_factory_presets[] = {
         0.40f, 0.15f, 0.48f, 0.93f, 0.60f,
         0.80f, 0.70f, 0.80f, 0.85f,
         0.75f, 0.70f, 0.40f, 0.80f,
-        0.60f, 0.15f, 0.167f, 0.25f, -1.0f,
+        0.60f, 0.15f, 0.167f, 0.25f, -1.0f, 9.0f,
         0.35f, 0.55f, 0.75f, 0.50f, 0.25f, 0.35f
     }},
 
@@ -292,7 +294,7 @@ static const NsawPreset g_factory_presets[] = {
         0.63f, 0.00f, 0.18f, 0.75f, 0.25f,
         0.65f, 0.55f, 0.88f, 0.70f,
         0.60f, 0.50f, 0.60f, 0.65f,
-        0.65f, 0.15f, 0.167f, 0.15f, 0.0f,
+        0.65f, 0.15f, 0.167f, 0.15f, 0.0f, 11.0f,
         0.45f, 0.55f, 0.70f, 0.25f, 0.08f, 0.40f
     }},
 
@@ -301,7 +303,7 @@ static const NsawPreset g_factory_presets[] = {
         0.73f, 0.05f, 0.22f, 0.78f, 0.30f,
         0.60f, 0.55f, 0.85f, 0.68f,
         0.55f, 0.50f, 0.55f, 0.60f,
-        0.65f, 0.20f, 0.167f, 0.10f, 0.0f,
+        0.65f, 0.20f, 0.167f, 0.10f, 0.0f, 11.0f,
         0.40f, 0.50f, 0.70f, 0.25f, 0.10f, 0.50f
     }},
 
@@ -310,7 +312,7 @@ static const NsawPreset g_factory_presets[] = {
         0.55f, 0.08f, 0.25f, 0.82f, 0.20f,
         0.75f, 0.60f, 0.90f, 0.80f,
         0.70f, 0.55f, 0.65f, 0.75f,
-        0.62f, 0.10f, 0.167f, 0.25f, -1.0f,
+        0.62f, 0.10f, 0.167f, 0.25f, -1.0f, 11.0f,
         0.38f, 0.60f, 0.75f, 0.35f, 0.15f, 0.35f
     }},
 
@@ -321,7 +323,7 @@ static const NsawPreset g_factory_presets[] = {
         0.48f, 0.18f, 0.20f, 0.60f, 0.60f,
         0.00f, 0.50f, 0.65f, 0.45f,
         0.00f, 0.45f, 0.05f, 0.40f,
-        0.80f, 0.55f, 0.167f, 0.45f, -1.0f,
+        0.80f, 0.55f, 0.167f, 0.45f, -1.0f, 5.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.00f, 0.55f
     }},
 
@@ -330,7 +332,7 @@ static const NsawPreset g_factory_presets[] = {
         0.35f, 0.00f, 0.05f, 0.30f, 0.20f,
         0.00f, 0.55f, 0.80f, 0.50f,
         0.00f, 0.50f, 0.15f, 0.45f,
-        0.80f, 0.30f, 0.167f, 0.60f, -2.0f,
+        0.80f, 0.30f, 0.167f, 0.60f, -2.0f, 5.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.00f, 0.55f
     }},
 
@@ -339,7 +341,7 @@ static const NsawPreset g_factory_presets[] = {
         0.52f, 0.30f, 0.55f, 0.88f, 0.50f,
         0.00f, 0.50f, 0.75f, 0.50f,
         0.00f, 0.45f, 0.10f, 0.40f,
-        0.80f, 0.45f, 0.167f, 0.40f, -1.0f,
+        0.80f, 0.45f, 0.167f, 0.40f, -1.0f, 5.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.00f, 0.55f
     }},
 
@@ -348,7 +350,7 @@ static const NsawPreset g_factory_presets[] = {
         0.42f, 0.15f, 0.18f, 0.55f, 0.75f,
         0.00f, 0.45f, 0.00f, 0.42f,
         0.00f, 0.40f, 0.00f, 0.35f,
-        0.82f, 0.60f, 0.167f, 0.40f, -1.0f,
+        0.82f, 0.60f, 0.167f, 0.40f, -1.0f, 5.0f,
         0.00f, 0.50f, 0.60f, 0.40f, 0.15f, 0.55f
     }},
 
@@ -359,7 +361,7 @@ static const NsawPreset g_factory_presets[] = {
         0.72f, 0.08f, 0.30f, 0.70f, 0.60f,
         0.00f, 0.45f, 0.00f, 0.40f,
         0.00f, 0.40f, 0.00f, 0.35f,
-        0.75f, 0.55f, 0.167f, 0.10f, -1.0f,
+        0.75f, 0.55f, 0.167f, 0.10f, -1.0f, 5.0f,
         0.00f, 0.50f, 0.60f, 0.50f, 0.20f, 0.55f
     }},
 
@@ -368,7 +370,7 @@ static const NsawPreset g_factory_presets[] = {
         0.82f, 0.25f, 0.60f, 0.85f, 0.30f,
         0.00f, 0.50f, 0.70f, 0.50f,
         0.00f, 0.45f, 0.40f, 0.45f,
-        0.80f, 0.50f, 0.167f, 0.40f, -1.0f,
+        0.80f, 0.50f, 0.167f, 0.40f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.60f, 0.25f, 0.10f, 0.60f
     }},
 
@@ -377,7 +379,7 @@ static const NsawPreset g_factory_presets[] = {
         0.82f, 0.00f, 0.00f, 0.00f, 0.25f,
         0.00f, 0.55f, 0.80f, 0.55f,
         0.00f, 0.50f, 0.50f, 0.50f,
-        0.70f, 0.50f, 0.167f, 0.00f, -1.0f,
+        0.70f, 0.50f, 0.167f, 0.00f, -1.0f, 3.0f,
         0.00f, 0.50f, 0.66f, 0.35f, 0.00f, 0.55f
     }},
 
@@ -386,7 +388,7 @@ static const NsawPreset g_factory_presets[] = {
         0.70f, 0.08f, 0.08f, 0.45f, 0.40f,
         0.00f, 0.55f, 0.65f, 0.55f,
         0.00f, 0.50f, 0.30f, 0.50f,
-        0.70f, 0.50f, 0.25f, 0.20f, -1.0f,
+        0.70f, 0.50f, 0.25f, 0.20f, -1.0f, 7.0f,
         0.15f, 0.40f, 0.66f, 0.35f, 0.15f, 0.50f
     }},
 
@@ -395,7 +397,7 @@ static const NsawPreset g_factory_presets[] = {
         0.40f, 0.80f, 0.00f, 0.00f, 0.85f,
         0.00f, 0.60f, 0.50f, 0.50f,
         0.00f, 0.55f, 0.05f, 0.45f,
-        0.75f, 0.65f, 0.167f, 0.20f, -1.0f,
+        0.75f, 0.65f, 0.167f, 0.20f, -1.0f, 7.0f,
         0.00f, 0.50f, 0.66f, 0.55f, 0.18f, 0.45f
     }},
 
@@ -404,7 +406,7 @@ static const NsawPreset g_factory_presets[] = {
         0.70f, 0.25f, 0.75f, 1.00f, 0.45f,
         0.00f, 0.55f, 0.70f, 0.55f,
         0.00f, 0.50f, 0.30f, 0.50f,
-        0.70f, 0.40f, 0.25f, 0.30f, -1.0f,
+        0.70f, 0.40f, 0.25f, 0.30f, -1.0f, 7.0f,
         0.15f, 0.50f, 0.66f, 0.35f, 0.12f, 0.50f
     }},
 
@@ -413,7 +415,7 @@ static const NsawPreset g_factory_presets[] = {
         0.55f, 0.15f, 0.50f, 0.90f, 0.35f,
         0.80f, 0.70f, 0.90f, 0.85f,
         0.75f, 0.65f, 0.70f, 0.80f,
-        0.60f, 0.10f, 0.167f, 0.20f, -1.0f,
+        0.60f, 0.10f, 0.167f, 0.20f, -1.0f, 7.0f,
         0.30f, 0.65f, 0.78f, 0.50f, 0.30f, 0.30f
     }},
 };
@@ -484,6 +486,12 @@ static void apply_params_to_engine(nsaw_instance_t *inst) {
     e->bend_range  = inst->params[P_BEND_RANGE];
     e->sub_level   = inst->params[P_SUB_LEVEL];
     e->sub_octave  = (int)roundf(inst->params[P_SUB_OCTAVE]);
+
+    int new_saw_count = (int)roundf(inst->params[P_SAW_COUNT]);
+    new_saw_count |= 1;  /* ensure odd */
+    if (new_saw_count != e->num_oscs) {
+        nsaw_engine_update_osc_config(e, new_saw_count);
+    }
 }
 
 static void apply_preset(nsaw_instance_t *inst, int preset_idx) {
@@ -704,8 +712,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
                 "},"
                 "\"oscillator\":{"
                     "\"children\":null,"
-                    "\"knobs\":[\"detune\",\"spread\",\"sub_level\",\"sub_octave\"],"
-                    "\"params\":[\"detune\",\"spread\",\"sub_level\",\"sub_octave\"]"
+                    "\"knobs\":[\"detune\",\"spread\",\"saw_count\",\"sub_level\",\"sub_octave\"],"
+                    "\"params\":[\"detune\",\"spread\",\"saw_count\",\"sub_level\",\"sub_octave\"]"
                 "},"
                 "\"filter\":{"
                     "\"children\":null,"

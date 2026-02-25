@@ -4,7 +4,7 @@ Instructions for Claude Code when working with this repository.
 
 ## Project Overview
 
-NuSaw module for Move Anything - a polyphonic detuned supersaw synthesizer with sine sub oscillator, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes, Juno-style chorus, and stereo ping-pong delay.
+NuSaw module for Move Anything - a polyphonic detuned multi-saw synthesizer with sine sub oscillator, TPT/SVF resonant lowpass filter, ADSR amp and filter envelopes, Juno-style chorus, and stereo ping-pong delay.
 
 ## Architecture
 
@@ -27,15 +27,15 @@ Implements Move Anything plugin_api_v2 (multi-instance):
 - `create_instance`: Initializes synth engine, loads factory presets
 - `destroy_instance`: Cleanup
 - `on_midi`: Routes MIDI to synth engine (polyphonic, 8 voices)
-- `set_param`: preset, octave_transpose, and 24 synth/fx parameters
+- `set_param`: preset, octave_transpose, and 25 synth/fx parameters
 - `get_param`: preset_name, preset_count, ui_hierarchy, chain_params, state
 - `render_block`: Renders stereo synth output with chorus and delay effects
 
 ### Synth Engine
 
 Polyphonic synthesizer (8 voices) with:
-- 7 detuned sawtooth oscillators per voice (1 center + 3 pairs) with PolyBLEP anti-aliasing
-- Exponential detune spacing (1:3:6 ratio), piecewise-linear detune curve
+- Configurable 3-25 detuned sawtooth oscillators per voice (1 center + N pairs) with PolyBLEP anti-aliasing
+- Triangular number detune spacing (generalizes 1:3:6 ratio), piecewise-linear detune curve
 - Analog pitch drift (slow random walk per oscillator)
 - Stereo panning of detuned pairs (constant-power pan law)
 - Sine sub oscillator with configurable octave offset (-2, -1, 0)
@@ -51,9 +51,9 @@ Polyphonic synthesizer (8 voices) with:
 - Juno-60 style chorus (dual triangle LFOs, stereo, equal-power crossfade)
 - Stereo ping-pong delay (20ms-1s, tone filter, soft-saturated feedback)
 
-### Parameters (24 total)
+### Parameters (25 total)
 
-**Oscillator**: `detune`, `spread`, `sub_level`, `sub_octave` (-2 to 0)
+**Oscillator**: `detune`, `spread`, `saw_count` (3-25, odd), `sub_level`, `sub_octave` (-2 to 0)
 **Filter**: `cutoff`, `resonance`, `f_amount`
 **Amp Envelope**: `attack`, `decay`, `sustain`, `release`
 **Filter Envelope**: `f_attack`, `f_decay`, `f_sustain`, `f_release`

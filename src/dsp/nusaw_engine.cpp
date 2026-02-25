@@ -56,50 +56,9 @@
 #define DRIFT_AMOUNT 0.0002f
 #define DRIFT_COEFF  0.00114f
 
-/* Detune voice spacing coefficients (exponential, ratio ~1:3:6)
- * Normalized so outermost = 1.0:
- *   pair 1 (inner):  1/6 = 0.1667  -- very close, subtle beating
- *   pair 2 (middle): 3/6 = 0.5     -- moderate spread
- *   pair 3 (outer):  6/6 = 1.0     -- widest, adds size
- * Voice layout: [center, +c1, -c1, +c2, -c2, +c3, -c3] */
-static const float g_detune_coeff[NSAW_OSC_VOICES] = {
-     0.0f,          /* voice 0: center */
-     1.0f / 6.0f,   /* voice 1: +inner */
-    -1.0f / 6.0f,   /* voice 2: -inner */
-     3.0f / 6.0f,   /* voice 3: +middle */
-    -3.0f / 6.0f,   /* voice 4: -middle */
-     1.0f,          /* voice 5: +outer */
-    -1.0f,          /* voice 6: -outer */
-};
-
-/* Stereo panning gains (constant-power pan law)
- * Pan positions: center=0, inner=+/-0.18, middle=+/-0.35, outer=+/-0.55
- * Formula: theta = (1 + pan) / 2 * pi/2, L = cos(theta), R = sin(theta)
- *
- * center (0.00): L=0.7071 R=0.7071
- * +inner (0.18): L=0.6004 R=0.7998   -inner (-0.18): L=0.7998 R=0.6004
- * +mid   (0.35): L=0.4952 R=0.8688   -mid   (-0.35): L=0.8688 R=0.4952
- * +outer (0.55): L=0.3473 R=0.9378   -outer (-0.55): L=0.9378 R=0.3473
- */
-static const float g_pan_l[NSAW_OSC_VOICES] = {
-    0.7071f,  /* center */
-    0.6004f,  /* +inner */
-    0.7998f,  /* -inner */
-    0.4952f,  /* +middle */
-    0.8688f,  /* -middle */
-    0.3473f,  /* +outer */
-    0.9378f,  /* -outer */
-};
-
-static const float g_pan_r[NSAW_OSC_VOICES] = {
-    0.7071f,  /* center */
-    0.7998f,  /* +inner */
-    0.6004f,  /* -inner */
-    0.8688f,  /* +middle */
-    0.4952f,  /* -middle */
-    0.9378f,  /* +outer */
-    0.3473f,  /* -outer */
-};
+/* Detune and pan coefficients are now computed dynamically in
+ * nsaw_engine_update_osc_config() and stored in the engine struct.
+ * Voice layout: [center, +c1, -c1, +c2, -c2, ..., +cM, -cM] */
 
 /* =====================================================================
  * Helpers
@@ -162,6 +121,47 @@ static inline float detune_curve(float x) {
 }
 
 /* =====================================================================
+ * Oscillator configuration (runtime)
+ * ===================================================================== */
+
+void nsaw_engine_update_osc_config(nsaw_engine_t *engine, int num_oscs) {
+    if (num_oscs < 3) num_oscs = 3;
+    if (num_oscs > NSAW_MAX_OSC_VOICES) num_oscs = NSAW_MAX_OSC_VOICES;
+    num_oscs |= 1;  /* ensure odd */
+
+    engine->num_oscs = num_oscs;
+    engine->num_pairs = (num_oscs - 1) / 2;
+    int M = engine->num_pairs;
+
+    /* Detune coefficients: triangular number spacing
+     * coeff_k = k*(k+1) / (M*(M+1)), normalized to outermost=1.0
+     * This generalizes the existing 1:3:6 ratio for M=3 */
+    engine->detune_coeff[0] = 0.0f;  /* center */
+    float denom = (float)(M * (M + 1));
+    for (int k = 1; k <= M; k++) {
+        float c = (float)(k * (k + 1)) / denom;
+        engine->detune_coeff[2*k - 1] =  c;  /* +side */
+        engine->detune_coeff[2*k]     = -c;  /* -side */
+    }
+
+    /* Pan positions: linear spread from center, capped at +/-0.55
+     * pan_k = k/M * 0.55 */
+    engine->pan_l[0] = 0.7071f;
+    engine->pan_r[0] = 0.7071f;
+    for (int k = 1; k <= M; k++) {
+        float pan = (float)k / (float)M * 0.55f;
+        float theta_pos = (1.0f + pan) * 0.5f * (float)M_PI * 0.5f;
+        float theta_neg = (1.0f - pan) * 0.5f * (float)M_PI * 0.5f;
+        /* +side voice */
+        engine->pan_l[2*k - 1] = cosf(theta_pos);
+        engine->pan_r[2*k - 1] = sinf(theta_pos);
+        /* -side voice */
+        engine->pan_l[2*k] = cosf(theta_neg);
+        engine->pan_r[2*k] = sinf(theta_neg);
+    }
+}
+
+/* =====================================================================
  * Engine init
  * ===================================================================== */
 
@@ -195,9 +195,13 @@ void nsaw_engine_init(nsaw_engine_t *engine) {
     engine->octave_transpose = 0;
     engine->current_bend = 0.0f;
 
+    /* Initialize oscillator configuration */
+    nsaw_engine_update_osc_config(engine, NSAW_DEFAULT_OSC_VOICES);
+
     /* Initialize smoothed params to match targets */
     engine->smooth_detune = engine->detune;
     engine->smooth_spread = engine->spread;
+    engine->smooth_cutoff = engine->cutoff;
 
     for (int i = 0; i < NSAW_MAX_VOICES; i++) {
         engine->voices[i].active = 0;
@@ -254,7 +258,7 @@ void nsaw_engine_note_on(nsaw_engine_t *engine, int note, float velocity) {
     v->age = engine->voice_counter++;
 
     /* Random phase initialization and zero drift state */
-    for (int j = 0; j < NSAW_OSC_VOICES; j++) {
+    for (int j = 0; j < engine->num_oscs; j++) {
         v->phase[j] = rand_float(&engine->rng_state);
         v->drift[j] = 0.0f;
     }
@@ -375,10 +379,6 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
 
     /* --- Filter parameters --- */
 
-    /* Cutoff: exponential mapping 20Hz to 20kHz */
-    float base_cutoff_hz = 20.0f * powf(1000.0f, engine->cutoff);
-    if (base_cutoff_hz > 20000.0f) base_cutoff_hz = 20000.0f;
-
     /* Resonance: Q from 0.5 to 20 */
     float q = 0.5f + engine->resonance * 19.5f;
 
@@ -413,9 +413,14 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
             /* --- Parameter smoothing (per-sample one-pole) --- */
             engine->smooth_detune += (engine->detune - engine->smooth_detune) * SMOOTH_COEFF;
             engine->smooth_spread += (engine->spread - engine->smooth_spread) * SMOOTH_COEFF;
+            engine->smooth_cutoff += (engine->cutoff - engine->smooth_cutoff) * SMOOTH_COEFF;
 
             float cur_detune = engine->smooth_detune;
             float cur_spread = engine->smooth_spread;
+
+            /* Cutoff: exponential mapping 20Hz to 20kHz (smoothed) */
+            float base_cutoff_hz = 20.0f * powf(1000.0f, engine->smooth_cutoff);
+            if (base_cutoff_hz > 20000.0f) base_cutoff_hz = 20000.0f;
 
             /* --- Detune scaling ---
              * Piecewise-linear curve maps detune param to [0,1],
@@ -437,14 +442,14 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
             /* RMS normalization: consistent loudness regardless of spread
              * Total energy = 1^2 + N_sides * gs^2; norm = 1/sqrt(total)
              * Works correctly with stereo panning (constant-power preserves total energy) */
-            float norm = 1.0f / sqrtf(1.0f + (float)(NSAW_OSC_VOICES - 1) * gs * gs);
+            float norm = 1.0f / sqrtf(1.0f + (float)(engine->num_oscs - 1) * gs * gs);
 
             /* --- Generate and mix all oscillator voices (stereo) --- */
 
             float osc_mix_l = 0.0f;
             float osc_mix_r = 0.0f;
 
-            for (int j = 0; j < NSAW_OSC_VOICES; j++) {
+            for (int j = 0; j < engine->num_oscs; j++) {
                 /* Analog pitch drift: one-pole lowpass filtered white noise
                  * Creates slow, independent pitch wander per oscillator (~0.35 cents) */
                 float noise = rand_float(&engine->rng_state) * 2.0f - 1.0f;
@@ -452,7 +457,7 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
                 float drift_mult = 1.0f + v->drift[j] * DRIFT_AMOUNT;
 
                 /* Per-voice increment: inc[j] = (inc0 + coeff[j] * dInc) * drift */
-                float inc_j = (inc0 + g_detune_coeff[j] * dInc) * drift_mult;
+                float inc_j = (inc0 + engine->detune_coeff[j] * dInc) * drift_mult;
                 if (inc_j < 0.0f) inc_j = 0.0f;  /* Safety clamp */
 
                 /* Advance and wrap phase */
@@ -467,8 +472,8 @@ void nsaw_engine_render(nsaw_engine_t *engine, float *out_left, float *out_right
 
                 /* Apply gain (center=1.0, sides=gs) and stereo pan */
                 float gain = (j == 0) ? 1.0f : gs;
-                osc_mix_l += saw * gain * g_pan_l[j];
-                osc_mix_r += saw * gain * g_pan_r[j];
+                osc_mix_l += saw * gain * engine->pan_l[j];
+                osc_mix_r += saw * gain * engine->pan_r[j];
             }
 
             /* RMS-based normalization for consistent loudness */
