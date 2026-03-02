@@ -2,7 +2,7 @@
   "id": "nusaw",
   "name": "NuSaw",
   "abbrev": "NS",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Polyphonic detuned multi-saw synthesizer with resonant lowpass filter, dual envelopes, chorus, and delay",
   "author": "charlesvestal",
   "license": "MIT",
